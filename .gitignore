@@ -1,0 +1,11 @@
+build/
+build-psp/
+build-host/
+.cache/
+*.pbp
+*.prx
+*.elf
+result
+result-*
+.direnv/
+assets/music/raw/
