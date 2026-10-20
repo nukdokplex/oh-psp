@@ -133,6 +133,47 @@ public:
 - **Memory Footprint**: PSP-1000 has only **32 MB** of total RAM (approx 20-24 MB accessible to user homebrew).
   - Avoid large heap allocations during gameplay.
   - Pre-allocate puzzle scratch buffers and solver states; do not perform deep unchecked recursion in board generators.
-- **Input Mapping**:
-  - Abstract input via `InputState` so both PSP physical buttons (D-Pad, Cross, Circle, Square, Triangle, Start, Select) and Host keyboard (Arrow keys, Z/X/C/V, Space, Enter, Esc) control the game identically.
+- **MIPS Allegrex Architecture Quirks**:
+  - **Compiler Flag `-G0`**: Always compile with `-G0` under PSP (`add_compile_options(-G0)`). Disables small-data optimization to prevent global pointer table overflow (`R_MIPS_GPREL16 relocation truncated`).
+  - **Type Widths**: On MIPS `psp-gcc`, `int32_t` is defined as `long int` (not `int`). Template deduction in functions like `std::clamp` will fail with mixed types; always specify types explicitly: `std::clamp<int32_t>(val, -32768, 32767)`.
+  - **Working Directory (`chdir`)**: PSP OS launches EBOOTs without setting CWD to the game folder. On startup, `main.cpp` must extract the directory from `argv[0]` and call `chdir(dir)`.
+- **Nix Sandbox Rule**: Nix flakes only copy files tracked by Git (`src = ./.`). Always register new files via `git add -N` before running `nix build`, otherwise the compiler inside the sandbox will fail to find them.
 - **Zero-Dependency Cores**: Keep `src/games/*/core` 100% free of OS/graphics headers (`<SDL.h>`, `<psp*.h>`). This allows instantaneous unit testing via `ctest` on host.
+
+---
+
+## 6. Audio Architecture & Sound Design
+
+- **Self-Contained EBOOT (Embedded Assets)**:
+  - All background music tracks are embedded directly into the `.rodata` section via GNU assembler `.incbin` (`src/engine/embedded_music.S`).
+  - Single-file `EBOOT.PBP` distribution avoids Memory Stick read latency, saves battery, and eliminates PSP XMB "Corrupted Data" errors caused by extra subfolders.
+- **MP3 Decoding**:
+  - Implemented using single-header `dr_mp3.h` with `drmp3_init_memory`.
+  - Streamed in chunks inside the SDL audio callback; loops seamlessly.
+- **Procedural Real-Time SFX Synthesizer**:
+  - All gameplay sound effects are 100% mathematically synthesized in `audio_callback` (harmonic overtones, frequency slides, exponential decay envelopes).
+  - Fully legal, royalty-free, zero disk I/O, zero external audio asset dependencies.
+- **Hardware Audio Parameters**:
+  - Frequency: strictly **44100 Hz** (matches PSP hardware `sceAudioChReserve`).
+  - Format: `AUDIO_S16SYS` (16-bit signed stereo).
+  - Buffer: **1024** samples (must be a multiple of 64 bytes for PSP hardware alignment).
+
+---
+
+## 7. Dual-Cursor UX Model (Focus vs. Pointer)
+
+The game provides two complementary navigation systems that coexist seamlessly:
+
+1. **Селектор (`Focus`)**:
+   - Discrete cell/item highlight frame controlled by the **D-Pad** (or Arrow keys).
+   - Jumps between grid tiles and menu cards one step at a time.
+2. **Указатель (`Pointer`)**:
+   - Continuous desktop-style arrow cursor controlled by the **Analog Stick** (or PC Mouse).
+   - Floats above all UI layers with a subtle drop shadow (`RenderUtils::draw_pointer`).
+   - Filtered with a deadzone of `0.18` to neutralize physical stick drift on older PSPs.
+3. **Hybrid Focus Priority Rule (CRITICAL)**:
+   - When hovering over an interactive cell/card, the Pointer pulls the Focus to that element **ONLY if the pointer is actively moving** (`input.pointer_moved == true`).
+   - When the Pointer is stationary, it **never** steals or locks the Focus; D-Pad navigation maintains complete, unhindered priority.
+4. **Button Prompt Convention**:
+   - Always display the Triangle prompt as **`[Tri]`** (never `[/^]` or `[/\]`) for readability on the low-resolution 480×272 screen.
+
